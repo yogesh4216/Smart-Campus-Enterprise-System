@@ -9,7 +9,122 @@ const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-// ... (Rest of Setup) ...
+app.use(cors());
+app.use(bodyParser.json());
+// Serve static files (PDFs)
+app.use('/public', express.static(path.join(__dirname, 'public')));
+
+// --- DATA STORE (In-Memory) ---
+const users = [
+    { id: "USR-ADMIN", name: "Admin Officer", email: "admin@college.edu", password: "admin", role: "Admin", department: "Administration" },
+    { id: "USR-IT", name: "IT Support", email: "it@college.edu", password: "it", role: "IT", department: "IT Services" },
+    // Pre-seed a student for testing convenience (ALICE from earlier tests is preserved if needed, but here is the main one)
+    { id: "USR-ALICE", name: "Alice Student", email: "alice@test.com", password: "pass", role: "Student", studentId: "CS-2024-001", department: "CSE" },
+    { id: "USR-ACCOUNTS", name: "Accounts Officer", email: "accounts@college.edu", password: "acc", role: "Accounts", department: "Finance" }
+];
+
+/*
+ Ticket Structure:
+ {
+    id: string,
+    userId: string,
+    studentName: string, 
+    studentId: string,
+    department: string,
+    requestType: string, // NEW: 'BONAFIDE', 'FEE_RECEIPT', 'WIFI', 'ID_CARD', 'OTHER'
+    purpose: string,
+    status: string,
+    timestamp: string,
+    chatHistory: [ { sender: "User"|"System"|"Admin", text: "...", pdfUrl?: "..." } ]
+ }
+*/
+const requests = [];
+
+const generateId = (prefix) => `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+// --- AUTH ENDPOINTS ---
+app.post('/api/auth/register', (req, res) => {
+    const { name, studentId, department, email, password } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: "Missing fields" });
+    if (users.find(u => u.email === email)) return res.status(400).json({ error: "User exists" });
+
+    const newUser = {
+        id: `USR-${Math.floor(10000 + Math.random() * 90000)}`,
+        name, studentId, department, email, password, role: "Student"
+    };
+    users.push(newUser);
+    res.json(newUser);
+});
+
+app.post('/api/auth/login', (req, res) => {
+    const { email, password } = req.body;
+    const user = users.find(u => u.email === email && u.password === password);
+    if (user) res.json(user);
+    else res.status(401).json({ error: "Invalid credentials" });
+});
+
+// --- HELPER: PDF GENERATION ---
+const generateDocument = (ticket, user) => {
+    return new Promise((resolve, reject) => {
+        const doc = new PDFDocument();
+        const filename = `${ticket.requestType}_${ticket.id}.pdf`;
+        const filepath = path.join(__dirname, 'public', 'certificates', filename);
+
+        const stream = fs.createWriteStream(filepath);
+        doc.pipe(stream);
+
+        // Common Header
+        doc.fontSize(20).text('ONE COLLEGE OF ENGINEERING', { align: 'center' });
+        doc.fontSize(10).text('123 Education Lane, Knowledge City', { align: 'center' });
+        doc.moveDown(2);
+
+        if (ticket.requestType === 'FEE_RECEIPT') {
+            // FEE RECEIPT TEMPLATE
+            doc.fontSize(18).text('OFFICIAL FEE RECEIPT', { align: 'center', underline: true });
+            doc.moveDown(2);
+
+            doc.fontSize(12).text(`Receipt No: ${ticket.id}`);
+            doc.text(`Date: ${new Date().toLocaleDateString()}`);
+            doc.moveDown();
+
+            doc.text(`Received from Mr./Ms. ${user.name} (${user.studentId})`);
+            doc.text(`Department: ${user.department}`);
+            doc.moveDown();
+
+            doc.text(`Purpose of Payment: ${ticket.purpose || "Semester Fees"}`);
+            doc.moveDown(2);
+
+            doc.rect(50, 250, 500, 30).stroke(); // Box
+            doc.fontSize(14).text("PAYMENT STATUS: PAID", 60, 260, { align: 'center', color: 'green' });
+
+            doc.moveDown(4);
+
+        } else {
+            // BONAFIDE / GENERAL TEMPLATE
+            doc.fontSize(18).text('BONAFIDE CERTIFICATE', { align: 'center', underline: true });
+            doc.moveDown(2);
+
+            let cleanPurpose = ticket.purpose?.replace(/i need a?n? ?(bonafide)? ?(certificate)?/gi, "").trim() || "General Purpose";
+            if (cleanPurpose.length < 3) cleanPurpose = "General Administrative Purpose";
+
+            doc.fontSize(12).text(`This is to certify that Mr./Ms. ${user.name} (Reg No: ${user.studentId}) is a bona fide student of this institution, studying in the Department of ${user.department}.`, {
+                align: 'justify'
+            });
+            doc.moveDown();
+            doc.text(`This certificate is issued on request for the purpose of: ${cleanPurpose}`);
+            doc.moveDown(4);
+        }
+
+        // Footer
+        doc.text('Authorized Signatory', { align: 'right' });
+        doc.fontSize(8).text('(Digitally Generated)', { align: 'right' });
+
+        doc.end();
+
+        stream.on('finish', () => resolve(filename));
+        stream.on('error', reject);
+    });
+};
 
 // --- IBM WATSON ORCHESTRATE INTEGRATION ---
 // Secrets loaded from .env
