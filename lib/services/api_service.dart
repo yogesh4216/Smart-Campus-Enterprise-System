@@ -4,9 +4,16 @@ import 'package:http/http.dart' as http;
 import '../models/user_model.dart';
 import '../models/ticket_model.dart';
 
+import 'dart:io';
+
 class ApiService {
-  // CHANGED: localhost is better for macOS execution
-  static const String _baseUrl = 'http://localhost:3000/api';
+  // Use 10.0.2.2 for Android Emulator, localhost for iOS/Web
+  static String get _baseUrl {
+    if (Platform.isAndroid) {
+      return 'http://10.0.2.2:3000/api';
+    }
+    return 'http://localhost:3000/api';
+  }
   
   static User? _currentUser;
   static User? get currentUser => _currentUser;
